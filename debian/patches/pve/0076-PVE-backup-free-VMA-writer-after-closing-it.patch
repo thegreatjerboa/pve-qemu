@@ -1,0 +1,43 @@
+From: Jeff Schumacher <thegreatjerboa@gmail.com>
+Subject: [PATCH] PVE backup: free VMA writer after closing it
+
+pvebackup_co_cleanup() and the qmp_backup() error path close the VMA
+writer but never call vma_writer_destroy(), so every VMA backup leaks the
+writer's output buffer (~3.7 MiB), header buffer (512 KiB) and struct in
+the kvm process. Destroy the writer after closing it, and free
+header_blob_table in vma_writer_destroy().
+
+Index: qemu/pve-backup.c
+===================================================================
+--- qemu.orig/pve-backup.c
++++ qemu/pve-backup.c
+@@ -273,6 +273,7 @@ static void coroutine_fn pvebackup_co_cl
+             pvebackup_propagate_error(local_err);
+          }
+ 
++        vma_writer_destroy(backup_state.vmaw);
+         backup_state.vmaw = NULL;
+     }
+ 
+@@ -1626,6 +1627,9 @@ err:
+     if (vmaw) {
+         Error *err = NULL;
+         vma_writer_close(vmaw, &err);
++        error_free(err);
++        vma_writer_destroy(vmaw);
++        backup_state.vmaw = NULL;
+         unlink(backup_file);
+     }
+ 
+Index: qemu/vma-writer.c
+===================================================================
+--- qemu.orig/vma-writer.c
++++ qemu/vma-writer.c
+@@ -810,6 +810,7 @@ void vma_writer_destroy(VmaWriter *vmaw)
+         g_checksum_free(vmaw->md5csum);
+     }
+ 
++    g_free(vmaw->header_blob_table);
+     qemu_vfree(vmaw->headerbuf);
+     qemu_vfree(vmaw->outbuf);
+     g_free(vmaw);
